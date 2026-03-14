@@ -6,6 +6,13 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from google import genai
 from ollama import Client as OllamaClient
+from .cost_tracker import calculate_cost
+
+from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_community.llms import Ollama
+
+import time
 
 # Load .env from project root (works regardless of cwd)
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
@@ -20,23 +27,43 @@ TIMEOUT = 60
 
 Message = Dict[str, str]
 
-def chat(messages: List[Message]) -> str:
-    """Send messages to LLM and return response text."""
-
+def chat(messages: List[Message]) -> Dict:
+    """Send messages to LLM and return response with metadata."""
     if not messages:
-        raise ValueError("messages cannot be empty")
+        raise ValueError("Messages list cannot be empty")
+
+    start_time = time.time()
+
     if PROVIDER == "openai":
-        return _call_openai(messages)
-
-    if PROVIDER == "ollama":
-        return _call_ollama(messages)
-
-    if PROVIDER == "google":
-        return _call_gemini(messages)
-
+        response = _call_openai(messages)
+    elif PROVIDER == "google":
+        response = _call_gemini(messages)
+    elif PROVIDER == "ollama":
+        response = _call_ollama(messages)
     else:
-        raise NotImplementedError(f"Provider '{PROVIDER}' not supported yet")
+        raise NotImplementedError(f"Provider {PROVIDER} not implemented")
 
+    duration_ms = int((time.time() - start_time) * 1000)
+
+    # Estimate tokens (rough: 1 token ≈ 4 characters)
+    prompt_text = " ".join([m["content"] for m in messages])
+    prompt_tokens = len(prompt_text) // 4
+    response_tokens = len(response) // 4
+    
+    cost = calculate_cost(PROVIDER, MODEL, prompt_tokens, response_tokens)
+
+    return {
+        "response": response,
+        "metadata": {
+            "provider": PROVIDER,
+            "model": MODEL,
+            "prompt_tokens": prompt_tokens,
+            "response_tokens": response_tokens,
+            "total_tokens": prompt_tokens + response_tokens,
+            "duration_secs": duration_ms,
+            "cost_usd": cost
+        }
+    }
 def _call_openai(messages: List[Message]) -> str:
     """Call OpenAI API."""
     if not OPENAI_API_KEY:
@@ -80,3 +107,28 @@ def _call_ollama(messages: List[Message]) -> str:
     if not response.message or not response.message.content:
         raise RuntimeError("Ollama returned empty response. Is Ollama running?")
     return response.message.content
+
+def get_langchain_llm():
+    if PROVIDER == "openai":
+        return ChatOpenAI(
+            model=MODEL,
+            temperature=0,
+            api_key=OPENAI_API_KEY
+        )
+
+    elif PROVIDER == "google":
+        return ChatGoogleGenerativeAI(
+            model=MODEL,
+            temperature=0,
+            google_api_key=GOOGLE_API_KEY
+        )
+
+    elif PROVIDER == "ollama":
+        return Ollama(
+            model=MODEL,
+            temperature=0,
+            base_url=OLLAMA_HOST
+        )
+
+    else:
+        raise ValueError(f"Unsupported provider: {PROVIDER}")

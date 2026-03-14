@@ -1,8 +1,12 @@
+import json
 import sys
 from pathlib import Path
-from src.core import chat, pick_requirement, parse_json_safely
+from src.core import chat, pick_requirement, parse_json_safely, get_logger,print_summary
 from typing import List, Dict
 import pandas as pd
+import time
+
+logger = get_logger("testcase_agent")
 
 # Project paths
 ROOT = Path(__file__).resolve().parents[2]
@@ -63,35 +67,70 @@ def save_as_csv(test_cases: List[Dict], csv_file: Path) -> None:
 
 
 def main():
-    """Run the test case generator agent."""
+    start_time = time.time()
+    llm_call_count = 0
+    metadata = None
 
-    # 1. Pick requirement file (from command line or auto-pick first)
-    file_arg = sys.argv[1] if len(sys.argv) > 1 else None
-    req_file = pick_requirement(file_arg, REQ_DIR)
-    requirement = req_file.read_text(encoding="utf-8")
+    try:
+        # Pick requirement file
+        file_arg = sys.argv[1] if len(sys.argv) > 1 else None
+        req_file = pick_requirement(file_arg,REQ_DIR)
+        requirement = req_file.read_text(encoding="utf-8")
+        logger.info(f"Processing requirement file: {req_file}")
 
-    print(f"Processing: {req_file.name}")
+        # Build messages for LLM
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": f"Requirements are follows:\\n\\n{requirement}"}
+        ]
 
-    # 2. Build messages for LLM
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"Requirement:\n\n{requirement}"}
-    ]
+        # Call LLM
+        logger.info("Calling LLM to generate test cases...")
+        result = chat(messages)
+        llm_call_count += 1
+        response = result["response"]
+        metadata = result["metadata"]
 
-    # 3. Call LLM
-    print("🤖 Calling LLM...")
-    response = chat(messages)
+        logger.debug(f"LLM call: {metadata['provider']}/{metadata['model']}, "
+                     f"{metadata['total_tokens']} tokens, {metadata['duration_ms']}ms")
 
-    # 4. Parse JSON response
-    raw_file = OUT_DIR / "raw_output.txt"
-    test_cases = parse_json_safely(response, raw_file)
+        logger.info(f"Cost: ${metadata['cost_usd']:.6f} ({metadata['total_tokens']} tokens)")
 
-    print(f"✅ Generated {len(test_cases)} test cases")
-    print(f"📝 Raw output saved: {raw_file.relative_to(ROOT)}")
-    
-    # 5. Save as CSV
-    csv_file = OUT_DIR / "test_cases.csv"
-    save_as_csv(test_cases, csv_file)
+        # Parse Json Response
+        raw_file_txt = OUT_DIR / "raw_output.txt"
+        raw_file_json = OUT_DIR / "raw_output.json"
+        testcases = parse_json_safely(response, raw_file_txt)
+        raw_file_json.write_text(json.dumps(testcases, indent=2), encoding="utf-8")
+
+        # Save as CSV
+        csv_file = OUT_DIR / "testcases.csv"
+        save_as_csv(testcases, csv_file)
+
+        logger.info(f"Generated test cases: {len(testcases)}")
+        logger.info(f"Raw Text saved to: {raw_file_txt}")
+        logger.info(f"Raw Json saved to: {raw_file_json}")
+        logger.info(f"CSV saved to: {csv_file}")
+
+        # Success summary
+        duration = time.time() - start_time
+        print_summary(duration, metadata, llm_call_count, "Success")
+
+    except Exception as e:
+        # Error summary
+        logger.error(f"Test Case Generator Agent failed: {e}")
+        duration = time.time() - start_time
+
+        # Create dummy metadata if LLM wasn't called
+        if metadata is None:
+            metadata = {
+                "total_tokens": 0,
+                "cost_usd": 0.0,
+                "provider": "N/A",
+                "model": "N/A"
+            }
+
+        print_summary(duration, metadata, llm_call_count, "Failed")
+        raise
 
 
 if __name__ == "__main__":

@@ -29,3 +29,6 @@ env/
 
 # Outputs (optional - depends if you want to track generated files)
 outputs/
+
+# Logs
+observability_logs/
