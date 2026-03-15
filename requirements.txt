@@ -12,3 +12,6 @@ langchain-core==1.2.19
 langchain-openai==1.1.11
 langchain-google-genai==4.2.1
 langchain-community==0.4.1
+
+# LangGraph
+langgraph==1.1.2
