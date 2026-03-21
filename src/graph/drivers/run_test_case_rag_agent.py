@@ -1,7 +1,7 @@
 """
 Driver for TestCase Generator Pipeline
 """
-from src.graph.test_case_generator.graph import build_graph
+from src.graph.test_case_rag.graph import build_graph
 from src.core import get_logger
 
 logger = get_logger("testcase_driver")
@@ -15,6 +15,7 @@ def main():
     # Initialize state with new fields
     init_state = {
         "requirement": "",
+        "retrieved_context": "",
         "test_cases": [],
         "errors": [],
         "validation_status": "pending",

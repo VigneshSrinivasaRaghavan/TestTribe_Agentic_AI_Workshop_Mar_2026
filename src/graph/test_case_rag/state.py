@@ -2,6 +2,7 @@ from typing import TypedDict, List, Dict
 
 class TestCaseState(TypedDict):
     requirements: str
+    retrieved_context: str
     test_cases: List[Dict]
     error: List[str]
     validation_status: str # "pass" | "fail"

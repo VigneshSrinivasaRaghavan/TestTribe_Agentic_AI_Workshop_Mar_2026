@@ -5,6 +5,7 @@ from langgraph.graph import StateGraph, END
 from .state import TestCaseState
 from .nodes import (
     read_requirement,
+retrieve_context,
     generate_tests,
     validate_tests,
     retry_generate,
@@ -16,13 +17,13 @@ from .nodes import (
 )
 
 def build_graph():
-    """Build and return compiled testcase generator graph."""
+    """Build and return compiled testcase generator graph with RAG."""
 
-    # Create graph
     workflow = StateGraph(TestCaseState)
 
     # Add nodes
     workflow.add_node("read", read_requirement)
+    workflow.add_node("retrieve", retrieve_context)      # NEW
     workflow.add_node("generate", generate_tests)
     workflow.add_node("validate", validate_tests)
     workflow.add_node("retry", retry_generate)
@@ -32,37 +33,26 @@ def build_graph():
 
     # Linear edges
     workflow.set_entry_point("read")
-    workflow.add_edge("read", "generate")
+    workflow.add_edge("read", "retrieve")               # NEW
+    workflow.add_edge("retrieve", "generate")           # NEW
     workflow.add_edge("generate", "validate")
 
-    # Conditional edge: validate → preview or retry
+    # Conditional edges (unchanged)
     workflow.add_conditional_edges(
         "validate",
         route_after_validation,
-        {
-            "preview": "preview",
-            "retry": "retry"
-        }
+        {"preview": "preview", "retry": "retry"}
     )
 
-    # Preview → Approval (always)
     workflow.add_edge("preview", "approval")
 
-    # Conditional edge: approval → save or retry
     workflow.add_conditional_edges(
         "approval",
         route_after_human_approval,
-        {
-            "save": "save",
-            "retry": "retry"
-        }
+        {"save": "save", "retry": "retry"}
     )
 
-    # Retry loops back to validate
     workflow.add_edge("retry", "validate")
-
-    # Save ends the workflow
     workflow.add_edge("save", END)
 
-    # Compile
     return workflow.compile()

@@ -11,6 +11,8 @@ from .state import TestCaseState
 from src.core import get_langchain_llm, pick_requirement, get_logger
 from src.prompts.testcase_prompts import TESTCASE_SYSTEM_PROMPT
 
+from src.core import search_vector_store
+
 # Setup
 logger = get_logger("testcase_graph")
 ROOT = Path(__file__).resolve().parents[3]
@@ -36,25 +38,51 @@ def read_requirement(state: TestCaseState) -> TestCaseState:
     return {"requirements": requirement}
 
 def generate_tests(state: TestCaseState) -> TestCaseState:
-    """Generate test cases with LLM."""
-    logger.info("Generating test cases with LLM...")
+    """Generate test cases with RAG context."""
+    logger.info("Generating test cases with RAG context...")
+
+    requirement = state["requirements"]
+    context = state.get("retrieved_context", "")
+
+    # Build enhanced prompt with context
+    user_message = f"""Based on the following company testing guidelines:
+
+{context}
+
+---
+
+Now generate test cases for this requirement:
+
+{requirement}"""
 
     try:
-        # Call LLM
-        response = chain.invoke({"requirement": state["requirements"]})
-
-        # Parse JSON
+        response = chain.invoke({"requirement": user_message})
         testcases = json.loads(response)
-        logger.info(f"Generated {len(testcases)} test cases")
+        logger.info(f"Generated {len(testcases)} test cases using RAG")
 
-        return {"test_cases": testcases, "errors": []}
+        return {
+            "test_cases": testcases,
+            "errors": [],
+            "retry_count": state.get("retry_count", 0),
+            "validation_status": "pending"
+        }
 
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse JSON: {e}")
-        return {"test_cases": [], "errors": [f"JSON parse error: {e}"]}
+        return {
+            "test_cases": [],
+            "errors": [f"JSON parse error: {e}"],
+            "retry_count": state.get("retry_count", 0),
+            "validation_status": "fail"
+        }
     except Exception as e:
         logger.error(f"LLM call failed: {e}")
-        return {"test_cases": [], "errors": [f"LLM error: {e}"]}
+        return {
+            "test_cases": [],
+            "errors": [f"LLM error: {e}"],
+            "retry_count": state.get("retry_count", 0),
+            "validation_status": "fail"
+        }
 
 
 def save_outputs(state: TestCaseState) -> TestCaseState:
@@ -109,15 +137,28 @@ def validate_tests(state: TestCaseState) -> TestCaseState:
     return {"validation_status": "pass"}
 
 def retry_generate(state: TestCaseState) -> TestCaseState:
-    """Retry test case generation."""
+    """Retry test case generation with RAG context."""
     retry_count = state.get("retry_count", 0) + 1
     logger.warning(f"🔄 Retry attempt {retry_count}/3")
- 
-    # Generate again (same logic as generate_tests)
+
+    requirement = state["requirements"]
+    context = state.get("retrieved_context", "")
+
+    # Build enhanced prompt with context
+    user_message = f"""Based on the following company testing guidelines:
+
+{context}
+
+---
+
+Now generate test cases for this requirement:
+
+{requirement}"""
+
     try:
-        response = chain.invoke({"requirement": state["requirements"]})
+        response = chain.invoke({"requirement": user_message})
         testcases = json.loads(response)
-        logger.info(f"Regenerated {len(testcases)} test cases")
+        logger.info(f"Regenerated {len(testcases)} test cases with RAG")
 
         return {
             "test_cases": testcases,
@@ -257,3 +298,31 @@ def route_after_human_approval(state: TestCaseState) -> str:
     else:
         logger.error("⚠️ Unknown approval status - routing to SAVE")
         return "save"
+
+def retrieve_context(state: TestCaseState) -> TestCaseState:
+    """Retrieve relevant testing guidelines from knowledge base."""
+
+    requirement = state["requirements"]
+    logger.info("Retrieving relevant testing guidelines...")
+
+    # Search vector store
+    results = search_vector_store(
+        query=f"test case guidelines for: {requirement[:200]}",
+        top_k=3
+    )
+
+    # Format context
+    context_parts = []
+    for i, (doc, score) in enumerate(results, 1):
+        source = doc.metadata.get('source', 'Unknown').split('/')[-1]
+        similarity = 1 - score
+
+        logger.info(f"Retrieved [{i}] {source} (similarity: {similarity:.2f})")
+
+        context_parts.append(f"[Source: {source}]\\n{doc.page_content}\\n")
+
+    retrieved_context = "\n---\n".join(context_parts)
+
+    logger.info(f"Retrieved {len(results)} relevant documents")
+
+    return {"retrieved_context": retrieved_context}
